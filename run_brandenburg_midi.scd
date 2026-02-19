@@ -215,3 +215,6 @@ s.waitForBoot {
   "Brandenburg: starting in 1 sec...".postln;
   fork { 1.wait; ~runBrandenburgMIDI.(); };
 };
+
+
+Quarks.gui
