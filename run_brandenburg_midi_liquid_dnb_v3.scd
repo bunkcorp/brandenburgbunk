@@ -11,6 +11,8 @@ s.waitForBoot {
 
     ~midiDir = "/Users/kevinwoods/Downloads/brand5-3-mids";
     ~partFiles = ["flute-score.mid", "cello-score.mid", "harpsichord-score.mid"];
+    ~amenPath = "/Users/kevinwoods/Desktop/ActuarialExams/copied_patches/amen.wav";
+    ~amenBeats = 4;           // beats in the loop (4 = 1 bar, 8 = 2 bars)
 
     //////////////////////////////
     // BUSSES
@@ -26,7 +28,7 @@ s.waitForBoot {
     // REVERB + BUILD SWEEP
     //////////////////////////////
 
-    SynthDef(\lushVerb, { |verbBus=0, masterBus=0, intro=2, build=8, hold=90|
+    SynthDef(\lushVerb, { |verbBus=0, masterBus=0, intro=2, build=8, hold=220|
         var dry, chorus, sweep, wet;
         dry = In.ar(verbBus, 2);
         chorus = dry + DelayC.ar(dry, 0.03, LFTri.kr(0.2).range(0.005, 0.018)) * 0.3;
@@ -64,7 +66,7 @@ s.waitForBoot {
     // ARRANGEMENT LEVEL
     //////////////////////////////
 
-    SynthDef(\arrangementLevel, { |levelBus=0, intro=2, build=8, hold=90, breakdown=10|
+    SynthDef(\arrangementLevel, { |levelBus=0, intro=2, build=8, hold=220, breakdown=10|
         var env = Env([0,0,1,1,0], [intro,build,hold,breakdown], \sin);
         Out.kr(levelBus, EnvGen.kr(env, doneAction:2));
     }).add;
@@ -116,19 +118,13 @@ s.waitForBoot {
     }).add;
 
     //////////////////////////////
-    // DRUMS
+    // DRUMS (Amen only; no synthetic kick/snare)
     //////////////////////////////
 
-    SynthDef(\dnbKick, { |drumBus=0|
-        var env = EnvGen.ar(Env.perc(0.001,0.2), doneAction:2);
-        var sig = SinOsc.ar(50, 0, env) * 0.9;
+    SynthDef(\amenBreak, { |drumBus=0, buf=0, rate=1, amp=0.8, barRate=0.71667|
+        var trig = Impulse.kr(barRate);
+        var sig = PlayBuf.ar(1, buf, rate, trigger: trig, startPos: 0) * amp;
         Out.ar(drumBus, Pan2.ar(sig));
-    }).add;
-
-    SynthDef(\dnbSnare, { |drumBus=0|
-        var env = EnvGen.ar(Env.perc(0.005,0.15), doneAction:2);
-        var sig = WhiteNoise.ar * env;
-        Out.ar(drumBus, Pan2.ar(sig * 0.5));
     }).add;
 
     s.sync;
@@ -144,7 +140,7 @@ s.waitForBoot {
     ~verbSynth = Synth(\lushVerb, [
         \verbBus, ~verbBus.index,
         \masterBus, ~masterBus.index,
-        \intro, 2, \build, 8, \hold, 90
+        \intro, 2, \build, 8, \hold, 220
     ], s, \addToTail);
 
     ~triggerSynth = Synth(\sidechainTrigger, [
@@ -182,10 +178,11 @@ s.waitForBoot {
 
         Pbindf(pat,
             \instrument, synth,
-            \dur, Pkey(\dur) * 0.25,
+            \dur, (Pkey(\dur) * 0.25).round(0.25),
             \sustain, Pkey(\dur) * 0.95,
-            \amp, (Pkey(\amp) ? ((Pkey(\vel) ? 100) / 127)) * 0.5,
-            \verbBus, ~verbBus.index
+            \amp, (Pkey(\amp) ? ((Pkey(\vel) ? 100) / 127)) * 1.15,
+            \verbBus, ~verbBus.index,
+            \hasGate, false
         );
     };
 
@@ -200,16 +197,26 @@ s.waitForBoot {
         \masterBus, ~masterBus.index
     );
 
-    // Kick on 1 and 3; snare on 2 and 4 (first delta 1, then every 2)
-    ~drums = Ppar([
-        Pbind(\instrument,\dnbKick,\dur,1,\drumBus,~drumBus.index),
-        Pbind(\instrument,\dnbSnare,\dur,Pseq([1,Pn(2,inf)],1),\drumBus,~drumBus.index)
-    ]);
+    // Amen: sample-accurate rate from frames; retrigger every bar (quant + barRate)
+    ~barSec = 4 * 60 / 172;
+    ~amenLoopSec = ~amenBeats * 60 / 172;
+    ~drums = Pbind(
+        \instrument, \amenBreak,
+        \dur, 9999,
+        \drumBus, ~drumBus.index,
+        \buf, Pfunc { ~amenBuf.bufnum },
+        \rate, Pfunc {
+            var targetFrames = ~amenLoopSec * s.sampleRate;
+            ~amenBuf.numFrames / targetFrames
+        },
+        \barRate, 1 / ~barSec,
+        \amp, 0.25
+    );
 
     ~score = Ppar([~orchestra,~bass,~drums]);
 
     ~startBrandenburg = {
-        ~player = ~score.play;
+        ~player = ~score.play(quant: 4);
         Synth(\arrangementLevel, [\levelBus, ~levelBus.index], s, \addToTail);
         "Brandenburg Liquid DnB v3 running @ 172 BPM".postln;
         nil
@@ -220,6 +227,12 @@ s.waitForBoot {
         fork { 2.wait; s.freeAll; "Stopped.".postln };
         nil
     };
+
+    // Load Amen and start (so drums are ready)
+    ~amenBuf = Buffer.read(s, ~amenPath, action: {
+        "Amen loaded.".postln;
+        ~startBrandenburg.();
+    });
 
     // Export to WAV: start playback, then run ~recordToWav.() or ~recordToWav.("path.wav", 120)
     ~recordToWav = { |path, duration = 120|
@@ -233,7 +246,6 @@ s.waitForBoot {
         nil
     };
 
-    ~startBrandenburg.();
     nil
 };
 // ~stopBrandenburgMIDI.();
