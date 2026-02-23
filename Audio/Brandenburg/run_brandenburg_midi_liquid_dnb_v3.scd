@@ -2,6 +2,7 @@
 // Requires: Quarks.install("wslib") then recompile (Cmd+K). Stop: ~stopBrandenburgMIDI.()
 
 s.options.numInputBusChannels = 0;
+s.options.maxNodes = 8192;
 
 s.waitForBoot {
 
@@ -11,8 +12,10 @@ s.waitForBoot {
 
     ~midiDir = "/Users/kevinwoods/Downloads/brand5-3-mids";
     ~partFiles = ["flute-score.mid", "cello-score.mid", "harpsichord-score.mid"];
-    ~amenPath = "/Users/kevinwoods/Desktop/ActuarialExams/copied_patches/amen.wav";
+    ~amenPath = "/Users/kevinwoods/Desktop/ActuarialExams/Audio/copied_patches/amen.wav";
     ~amenBeats = 4;           // beats in the loop (4 = 1 bar, 8 = 2 bars)
+    ~vocalPath = "/Users/kevinwoods/Desktop/ActuarialExams/Exam_Prep/Exam PA/PA_Module_Materials/PA-Rap-Vocal.aiff";
+    ~vocalPhrasesDir = "/Users/kevinwoods/Desktop/ActuarialExams/Exam_Prep/Exam PA/PA_Module_Materials/PA-Rap-Vocal-Phrases";
 
     //////////////////////////////
     // BUSSES
@@ -127,6 +130,12 @@ s.waitForBoot {
         Out.ar(drumBus, Pan2.ar(sig));
     }).add;
 
+    SynthDef(\vocalPlay, { |buf=0, levelBus=0, amp=0.6|
+        var sig = PlayBuf.ar(1, buf, 1, doneAction: 2);
+        var level = In.kr(levelBus, 1);
+        Out.ar(0, Pan2.ar(sig * amp * level, 0));
+    }).add;
+
     s.sync;
 
     TempoClock.default.tempo = 172/60;
@@ -182,7 +191,7 @@ s.waitForBoot {
             \sustain, Pkey(\dur) * 0.95,
             \amp, (Pkey(\amp) ? ((Pkey(\vel) ? 100) / 127)) * 1.15,
             \verbBus, ~verbBus.index,
-            \hasGate, false
+            \hasGate, (synth != \brand_harpsichord)
         );
     };
 
@@ -215,6 +224,18 @@ s.waitForBoot {
 
     ~score = Ppar([~orchestra,~bass,~drums]);
 
+    ~vocalBarsPerPhrase = 8;
+    ~buildScoreWithVocal = {
+        ~vocalPattern = Pbind(
+            \instrument, \vocalPlay,
+            \dur, ~vocalBarsPerPhrase * 4,
+            \buf, Pseq(~vocalBuffers.collect(_.bufnum), 1),
+            \levelBus, ~levelBus.index,
+            \amp, 0.6
+        );
+        ~score = Ppar([~orchestra, ~bass, ~drums, ~vocalPattern]);
+    };
+
     ~startBrandenburg = {
         ~player = ~score.play(quant: 4);
         Synth(\arrangementLevel, [\levelBus, ~levelBus.index], s, \addToTail);
@@ -228,25 +249,64 @@ s.waitForBoot {
         nil
     };
 
-    // Load Amen and start (so drums are ready)
-    ~amenBuf = Buffer.read(s, ~amenPath, action: {
-        "Amen loaded.".postln;
-        ~startBrandenburg.();
-    });
-
-    // Export to WAV: start playback, then run ~recordToWav.() or ~recordToWav.("path.wav", 120)
-    ~recordToWav = { |path, duration = 120|
+    // Recording: path, duration (sec), openWhenDone (run from terminal = auto-record + open)
+    ~recordToWav = { |path, duration = 120, openWhenDone = false|
         path = path ?? { "~/Desktop/Brandenburg_LiquidDnB_v3.wav".standardizePath };
         path = path.asString.standardizePath;
         if(s.serverRunning.not) { "Server not running. Boot server first.".postln; ^nil };
         s.record(path);
         ("Recording to " ++ path).postln;
-        fork { duration.wait; s.stopRecording; ("Saved: " ++ path).postln };
+        fork({
+            duration.wait;
+            s.stopRecording;
+            ("Saved: " ++ path).postln;
+            if(openWhenDone) { ("open " ++ path.quote).unixCmd };
+        }, SystemClock);
         ("Stop early: s.stopRecording").postln;
         nil
     };
 
+    // Load Amen; then optional vocal (phrase-per-bar or single file); when ready, start and record
+    ~recordPath = "~/Desktop/MyBrandenburg.wav".standardizePath;
+    ~recordSec = 250;
+    ~vocalBuffers = [];
+    ~vocalBuf = nil;
+    ~phraseFiles = PathName(~vocalPhrasesDir).files.select({ |f| f.extension.toLower == "aiff" }).sort({ |a,b| a.fileName < b.fileName });
+    ~usePhraseVocal = ~phraseFiles.size > 0;
+    ~tryStart = {
+        if(~usePhraseVocal and: { ~vocalBuffers.size > 0 }, {
+            ~buildScoreWithVocal.();
+            ("PA rap vocal phrases: " ++ ~vocalBuffers.size ++ " (one per bar).").postln;
+        }, {
+            if(~vocalBuf.notNil, {
+                Synth(\vocalPlay, [\buf, ~vocalBuf.bufnum, \levelBus, ~levelBus.index, \amp, 0.6], s, \addToTail);
+                "PA rap vocal (single) started.".postln;
+            });
+        });
+        ~startBrandenburg.();
+        ~recordToWav.(~recordPath, ~recordSec, true);
+    };
+    ~amenBuf = Buffer.read(s, ~amenPath, action: {
+        "Amen loaded.".postln;
+        if(~usePhraseVocal, {
+            fork({
+                ~phraseFiles.do { |path, i|
+                    var b = Buffer.read(s, path.fullPath);
+                    s.sync;
+                    ~vocalBuffers = ~vocalBuffers.add(b);
+                };
+                ("Phrase vocals loaded: " ++ ~vocalBuffers.size).postln;
+                ~tryStart.();
+            }, SystemClock);
+        }, {
+            ~needVocal = PathName(~vocalPath).isFile;
+            if(~needVocal, {
+                ~vocalBuf = Buffer.read(s, ~vocalPath, action: { "Vocal loaded.".postln; ~tryStart.() });
+            }, { ~tryStart.() });
+        });
+    });
+
     nil
 };
 // ~stopBrandenburgMIDI.();
-// Export: ~startBrandenburg.(); ~recordToWav.();  — or ~recordToWav.("/full/path.wav", 110) for 110 sec
+// Manual record: ~recordToWav.();  or ~recordToWav.("~/Desktop/MyBrandenburg.wav", 250, true)
