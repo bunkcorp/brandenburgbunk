@@ -1,19 +1,23 @@
-// Brandenburg MIDI – Liquid DnB v2 (corrected).
+// Brandenburg MIDI – Liquid DnB v2 (Amen version).
 // Requires: Quarks.install("wslib")  // then recompile (Cmd+K) and run this (Cmd+Enter)
 // Stop: ~stopBrandenburgMIDI.() or Cmd+Period.
 //
-// Fixes: Splay (no ! 2), proper 2-step snare (offset 1), sustain = dur*0.95,
-//        filter sweep aligned to arrangement (intro/build/hold), sidechain locked to TempoClock,
-//        reese → masterBus (dry, no verb on sub).
+// Changes vs v2:
+// - Replaces synthetic kick/snare with Amen sample playback
+// - Uses sample-accurate playback rate + bar retrigger sync at 172 BPM
+// - Keeps v2 orchestral/reese/sidechain architecture
 
 s.options.numInputBusChannels = 0;
 s.options.blockSize = 512;
-s.options.outDevice = "Kevin’s AirPods P";
+s.options.outDevice = "MacBook Pro Speakers";
 
 s.waitForBoot {
 
   ~midiDir = "/Users/kevinwoods/Downloads/brand5-3-mids";
   ~partFiles = ["flute-score.mid", "cello-score.mid", "harpsichord-score.mid"];
+  ~amenPath = "/Users/kevinwoods/Desktop/ActuarialExams/Audio/copied_patches/amen.wav";
+  ~amenBeats = 4;
+  ~amenBpm = 172;
 
   ~verbBus = Bus.audio(s, 2);
   ~masterBus = Bus.audio(s, 2);
@@ -22,7 +26,6 @@ s.waitForBoot {
   ~drumBus = Bus.audio(s, 2);
 
   // ----------------- REVERB + CHORUS + SWEEP (aligned to arrangement) -----------------
-  // Intro 2s closed, build 8s opens, hold 90s open — no sweep at wrong time
   SynthDef(\lushVerb, { |verbBus = 0, masterBus = 0, intro = 2, build = 8, hold = 90|
     var dry, rate, mod, chorus, sweep, wet;
     dry = In.ar(verbBus, 2);
@@ -37,7 +40,8 @@ s.waitForBoot {
 
   // ----------------- SIDECHAIN (locked to TempoClock) -----------------
   SynthDef(\sidechainTrigger, { |triggerBus = 0, tempo = 2|
-    var trig = Impulse.kr(tempo);
+    // Trigger faster than quarter-note pulse so pumping follows break transients more tightly.
+    var trig = Impulse.kr(tempo * 2);
     var env = EnvGen.ar(Env.perc(0.001, 0.12), trig);
     Out.ar(triggerBus, env);
   }).add;
@@ -51,13 +55,13 @@ s.waitForBoot {
     Out.ar(0, (sig * gain * level) + drums);
   }).add;
 
-  SynthDef(\arrangementLevel, { |levelBus = 0, intro = 2, build = 8, hold = 90, breakdown = 10|
+  SynthDef(\arrangementLevel, { |levelBus = 0, intro = 0, build = 0.05, hold = 120, breakdown = 10|
     var env = Env([0, 0, 1, 1, 0], [intro, build, hold, breakdown], \sin);
     var level = EnvGen.kr(env, doneAction: 2);
     Out.kr(levelBus, level);
   }).add;
 
-  // ----------------- ORCHESTRA: Splay creates stereo (no ! 2) -----------------
+  // ----------------- ORCHESTRA: Splay creates stereo -----------------
   SynthDef(\brand_flute, { |freq = 440, amp = 0.3, sustain = 1, gate = 1, pan = 0, verbBus = 0|
     var env, sig, width;
     env = EnvGen.kr(Env.adsr(0.05, 0.3, 0.7, 0.4), gate, doneAction: 2);
@@ -85,7 +89,7 @@ s.waitForBoot {
     Out.ar(verbBus, Splay.ar(sig * env * amp, width));
   }).add;
 
-  // ----------------- REESE → masterBus (dry, no verb on sub) -----------------
+  // ----------------- REESE -----------------
   SynthDef(\reeseBass, { |freq = 55, amp = 0.6, gate = 1, pan = 0, masterBus = 0|
     var env = EnvGen.kr(Env.adsr(0.01, 0.3, 0.8, 0.2), gate, doneAction: 2);
     var detune = [0.99, 1.01];
@@ -95,16 +99,15 @@ s.waitForBoot {
     Out.ar(masterBus, Pan2.ar(sig * env * amp, pan));
   }).add;
 
-  SynthDef(\dnbKick, { |drumBus = 0|
-    var env = EnvGen.ar(Env.perc(0.001, 0.2), doneAction: 2);
-    var sig = SinOsc.ar(50, 0, env) * 0.8;
-    Out.ar(drumBus, Pan2.ar(sig));
-  }).add;
-
-  SynthDef(\dnbSnare, { |drumBus = 0|
-    var env = EnvGen.ar(Env.perc(0.005, 0.15), doneAction: 2);
-    var noise = WhiteNoise.ar * env;
-    Out.ar(drumBus, Pan2.ar(noise * 0.5));
+  // ----------------- AMEN DRUM LOOP -----------------
+  SynthDef(\amenBreak, { |drumBus = 0, buf = 0, rate = 1, amp = 0.34, barRate = 0.71667|
+    var trig = Impulse.kr(barRate);
+    var sig = PlayBuf.ar(1, buf, rate, trigger: trig, startPos: 0);
+    // Shape toward DnB break feel without fully replacing the source character
+    sig = HPF.ar(sig, 30);
+    sig = BPeakEQ.ar(sig, 1800, 0.8, 2.0);
+    sig = (sig * 1.2).tanh;
+    Out.ar(drumBus, Pan2.ar(sig * amp));
   }).add;
 
   s.sync;
@@ -132,8 +135,8 @@ s.waitForBoot {
 
   ~levelBus.set(1);
   ~testBeep = Synth(\brand_flute, [\freq, 523.25, \amp, 0.5, \pan, 0, \verbBus, ~verbBus.index], s, \addToHead);
-  fork { 0.5.wait; ~testBeep.set(\gate, 0); 0.2.wait; ~levelBus.set(0) };
-  "Brandenburg Liquid DnB v2: test beep (C5).".postln;
+  fork { 0.5.wait; ~testBeep.set(\gate, 0) };
+  "Brandenburg Liquid DnB v2 Amen: test beep (C5).".postln;
 
   ~patterns = [];
   ~partFiles.do { |name|
@@ -148,14 +151,14 @@ s.waitForBoot {
     };
   };
 
-  // ----------------- PLAYBACK: dur ×0.25, sustain = dur*0.95 (no double scaling) -----------------
   ~makePart = { |name, pat|
     var synth = \brand_flute, pan = 0;
     if (name.contains("cello")) { synth = \brand_cello; pan = -0.4 };
     if (name.contains("harpsichord")) { synth = \brand_harpsichord; pan = 0.4 };
     Pbindf(pat,
       \instrument, synth,
-      \dur, Pkey(\dur) * 0.25,
+      // Keep MIDI durations in beat units from SimpleMIDIFile.
+      \dur, Pkey(\dur),
       \sustain, Pkey(\dur) * 0.95,
       \amp, (Pkey(\amp) ? ((Pkey(\vel) ? 100) / 127)) * 0.5,
       \pan, pan,
@@ -174,32 +177,45 @@ s.waitForBoot {
     \masterBus, ~masterBus.index
   );
 
-  // Kick on 1 and 3; snare on 2 and 4 (first delta 1, then every 2 = backbeat)
-  ~drums = Ppar([
-    Pbind(\instrument, \dnbKick, \dur, 1, \drumBus, ~drumBus.index),
-    Pbind(\instrument, \dnbSnare, \dur, Pseq([1, Pn(2, inf)], 1), \drumBus, ~drumBus.index)
-  ]);
+  // Amen loop sync math: derive loop duration from the actual loaded file.
+  ~barSec = 4 * 60 / ~amenBpm;
+  ~drums = Pbind(
+    \instrument, \amenBreak,
+    \dur, 9999,
+    \drumBus, ~drumBus.index,
+    \buf, Pfunc { ~amenBuf.bufnum },
+    \rate, Pfunc {
+      var loopSec = ~amenBuf.numFrames / s.sampleRate;
+      loopSec / ~barSec
+    },
+    \barRate, 1 / ~barSec,
+    \amp, 0.5
+  );
 
   ~score = Ppar([~orchestraScore, ~bass, ~drums]);
 
   ~startBrandenburg = {
-    ~player = ~score.play;
+    ~player = ~score.play(quant: 4);
     ~arrangementSynth = Synth(\arrangementLevel, [
       \levelBus, ~levelBus.index,
-      \intro, 2, \build, 8, \hold, 90, \breakdown, 10
+      \intro, 0, \build, 0.05, \hold, 120, \breakdown, 10
     ], s, \addToTail);
-    "Brandenburg Liquid DnB v2 @ 172 BPM (corrected stereo, sweep, sustain, 2-step, reese dry).".postln;
+    "Brandenburg Liquid DnB v2 Amen @ 172 BPM.".postln;
     nil
   };
-  ~startBrandenburg.();
-
-  "v2: Splay fix, sustain=dur*0.95, sweep=arrangement, sidechain=tempo, snare offset 1, reese→master.".postln;
 
   ~stopBrandenburgMIDI = {
     ~player.stop;
     fork { 2.wait; s.freeAll; "Stopped (release tails cleared).".postln };
     nil
   };
+
+  ~amenBuf = Buffer.read(s, ~amenPath, action: {
+    "Amen loaded.".postln;
+    ~startBrandenburg.();
+  });
+
+  "v2-amen: Amen break replaces synthetic kick/snare; bar-synced retrigger enabled.".postln;
   nil
 };
-~stopBrandenburgMIDI.();
+// ~stopBrandenburgMIDI.();
